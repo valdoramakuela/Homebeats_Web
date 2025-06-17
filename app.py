@@ -1,0 +1,79 @@
+from flask import Flask, render_template, request, send_file, redirect, url_for
+import pandas as pd
+import os
+from io import BytesIO
+import tempfile
+
+app = Flask(__name__)
+
+BUSINESS_KEYWORDS = ["LLC", "L.L.C", "TRUST", "Trust", "Inc", "Company", "Corp", "Co."]
+
+def is_business_name(name):
+    return any(keyword.lower() in name.lower() for keyword in BUSINESS_KEYWORDS)
+
+def convert_pw_to_homebeat(input_file):
+    df = pd.read_excel(input_file, skiprows=4)
+    required_columns = [
+        "Address", "City", "State", "Zip",
+        "Property Owners", "Property Owner Emails"
+    ]
+
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column: {col}")
+
+    rows = []
+
+    for _, row in df.iterrows():
+        address = row["Address"]
+        city = row["City"]
+        state = row["State"]
+        zip_code = row["Zip"]
+        owners = [o.strip() for o in str(row["Property Owners"]).split(",") if o.strip()]
+        emails = [e.strip() for e in str(row["Property Owner Emails"]).split(",") if e.strip()]
+
+        for i in range(min(len(owners), len(emails))):
+            name = owners[i]
+            email = emails[i]
+
+            if is_business_name(name) and len(owners) == 1:
+                display_name = name
+            elif is_business_name(name):
+                continue
+            else:
+                display_name = name.split()[0] if name.split() else name
+
+            rows.append({
+                "Address": address,
+                "City": city,
+                "State": state,
+                "Zip": zip_code,
+                "Owner Name": display_name,
+                "Email": email
+            })
+
+    output_df = pd.DataFrame(rows)
+    output = BytesIO()
+    output_df.to_csv(output, index=False)
+    output.seek(0)
+    return output
+
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        file = request.files.get('file')
+        if not file:
+            return "No file uploaded", 400
+
+        try:
+            output = convert_pw_to_homebeat(file)
+            return send_file(output, download_name="homebeat.csv", as_attachment=True)
+        except Exception as e:
+            return f"Error: {str(e)}", 500
+
+    return render_template("index.html")
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
